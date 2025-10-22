@@ -12,47 +12,50 @@
             -webkit-font-smoothing: antialiased;
             -moz-osx-font-smoothing: grayscale;
         }
-        /* Custom styles for drag-and-drop feedback */
-        .dragging {
-            opacity: 0.5;
-            transform: scale(1.05);
-        }
-        .drag-over {
-            background-color: #eef2ff; /* A light indigo color for drop zones */
-            border: 2px dashed #6366f1;
-        }
-        .course-list-drag-over {
-            background-color: #f0f9ff;
-        }
-        /* Hide the default add button when the course list is empty */
-        .courses:empty + .add-course-btn-placeholder {
-            display: none;
-        }
-         /* Simple animation for adding/moving items */
-        .term, .course {
-            transition: all 0.2s ease-in-out;
-        }
+        .dragging { opacity: 0.5; transform: scale(1.05); }
+        .drag-over { background-color: #eef2ff; border: 2px dashed #6366f1; }
+        .course-list-drag-over { background-color: #f0f9ff; }
+        .courses:empty + .add-course-btn-placeholder { display: none; }
+        .term, .course { transition: all 0.2s ease-in-out; }
     </style>
 </head>
 <body class="bg-gray-50 text-gray-800">
 
-    <div class="container mx-auto p-4 md:p-8">
+    <!-- Login Screen -->
+    <div id="login-overlay" class="fixed inset-0 bg-gray-100 z-50 flex items-center justify-center">
+        <div class="bg-white p-10 rounded-lg shadow-xl text-center max-w-sm w-full">
+            <h2 class="text-2xl font-bold mb-2 text-gray-700">Academic Planner</h2>
+            <p class="text-gray-500 mb-6">Sign in to sync your planner across all devices.</p>
+            <button id="google-login-btn" class="bg-blue-600 text-white font-semibold py-3 px-6 rounded-lg shadow-md hover:bg-blue-700 transition-colors flex items-center justify-center mx-auto w-full">
+                <svg class="w-5 h-5 mr-3" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg"><path fill="#FFC107" d="M43.611,20.083H42V20H24v8h11.303c-1.649,4.657-6.08,8-11.303,8c-6.627,0-12-5.373-12-12c0-6.627,5.373-12,12-12c3.059,0,5.842,1.154,7.961,3.039l5.657-5.657C34.046,6.053,29.268,4,24,4C12.955,4,4,12.955,4,24c0,11.045,8.955,20,20,20c11.045,0,20-8.955,20-20C44,22.659,43.862,21.35,43.611,20.083z"></path><path fill="#FF3D00" d="M6.306,14.691l6.571,4.819C14.655,15.108,18.961,12,24,12c3.059,0,5.842,1.154,7.961,3.039l5.657-5.657C34.046,6.053,29.268,4,24,4C16.318,4,9.656,8.337,6.306,14.691z"></path><path fill="#4CAF50" d="M24,44c5.166,0,9.86-1.977,13.409-5.192l-6.19-5.238C29.211,35.091,26.715,36,24,36c-5.202,0-9.619-3.317-11.283-7.946l-6.522,5.025C9.505,39.556,16.227,44,24,44z"></path><path fill="#1976D2" d="M43.611,20.083H42V20H24v8h11.303c-0.792,2.237-2.231,4.166-4.087,5.571c0.001-0.001,0.002-0.001,0.003-0.002l6.19,5.238C36.971,39.205,44,34,44,24C44,22.659,43.862,21.35,43.611,20.083z"></path></svg>
+                <span>Sign in with Google</span>
+            </button>
+        </div>
+    </div>
+
+    <!-- Main App -->
+    <div id="app-container" class="container mx-auto p-4 md:p-8 opacity-0 transition-opacity">
         <!-- Header -->
         <header class="flex flex-col md:flex-row items-start md:items-center justify-between mb-8 gap-4">
             <div>
                 <h1 class="text-2xl md:text-3xl font-bold text-gray-700">Academic Planner</h1>
-                <div id="auth-status" class="text-xs text-gray-500 mt-1">Loading...</div>
+                <div id="auth-status" class="text-xs text-gray-500 mt-1">Connecting...</div>
             </div>
-            <button id="add-term-btn" class="bg-indigo-600 text-white font-semibold py-2 px-4 rounded-lg shadow-md hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-opacity-75 transition-colors hidden">
-                Add Term
-            </button>
+            <div class="flex gap-4">
+                <button id="add-term-btn" class="bg-indigo-600 text-white font-semibold py-2 px-4 rounded-lg shadow-md hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-opacity-75 transition-colors hidden">
+                    Add Term
+                </button>
+                <button id="sign-out-btn" class="bg-red-500 text-white font-semibold py-2 px-4 rounded-lg shadow-md hover:bg-red-600 transition-colors hidden">
+                    Sign Out
+                </button>
+            </div>
         </header>
 
         <!-- Terms Container -->
         <main id="terms-container" class="flex overflow-x-auto pb-4 gap-6 min-h-[60vh] items-start">
             <!-- Loading state -->
             <div id="loading-indicator" class="w-full text-center p-10 text-gray-500">
-                Connecting to planner...
+                Loading planner...
             </div>
             <!-- Term columns will be dynamically inserted here -->
         </main>
@@ -76,15 +79,15 @@
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { 
             getAuth, 
-            signInAnonymously, 
-            signInWithCustomToken, 
-            onAuthStateChanged 
+            onAuthStateChanged,
+            GoogleAuthProvider,
+            signInWithPopup,
+            signOut
         } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { 
             getFirestore, 
             doc, 
             addDoc, 
-            setDoc, 
             updateDoc, 
             deleteDoc, 
             onSnapshot, 
@@ -99,14 +102,28 @@
         let draggedItem = null; // {type: 'term'/'course', termId: string, courseId: string}
 
         // --- FIREBASE & AUTH GLOBALS ---
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-        const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
+        
+        // This is your web app's Firebase configuration (from your screenshot)
+        const firebaseConfig = {
+            apiKey: "azasyO0atGgtpBmywg2QzUWJmCTGxxR2c8ppM", // I've obscured part of your key for safety
+            authDomain: "my-course-planner-8bc4d.firebaseapp.com",
+            projectId: "my-course-planner-8bc4d",
+            storageBucket: "my-course-planner-8bc4d.appspot.com", // Corrected this from your screenshot
+            messagingSenderId: "954897895971",
+            appId: "1:954897895971:web:d41173ef8bc3be89afe9796"
+        };
+        // --- END OF CONFIG ---
+
         let app, db, auth;
         let userId;
         let termsCollectionPath;
         let termsSnapshotUnsubscribe = null; // To stop listener on logout
 
         // --- DOM ELEMENTS ---
+        const loginOverlay = document.getElementById('login-overlay');
+        const googleLoginBtn = document.getElementById('google-login-btn');
+        const appContainer = document.getElementById('app-container');
+        const signOutBtn = document.getElementById('sign-out-btn');
         const termsContainer = document.getElementById('terms-container');
         const addTermBtn = document.getElementById('add-term-btn');
         const authStatusEl = document.getElementById('auth-status');
@@ -131,6 +148,8 @@
                 setupAuthListener(); // Start auth process
 
                 // Attach modal and static button listeners
+                googleLoginBtn.addEventListener('click', signInWithGoogle);
+                signOutBtn.addEventListener('click', () => signOut(auth));
                 addTermBtn.addEventListener('click', addTerm);
                 modalCancelBtn.addEventListener('click', hideModal);
                 modalBackdrop.addEventListener('click', hideModal);
@@ -153,26 +172,43 @@
         });
 
         // --- AUTHENTICATION ---
+        async function signInWithGoogle() {
+            const provider = new GoogleAuthProvider();
+            try {
+                await signInWithPopup(auth, provider);
+                // onAuthStateChanged will handle the rest
+            } catch (error) {
+                console.error("Error signing in with Google:", error);
+                authStatusEl.textContent = `Login failed: ${error.message}`;
+            }
+        }
+
         function setupAuthListener() {
             onAuthStateChanged(auth, async (user) => {
                 if (user) {
                     // User is signed in
                     userId = user.uid;
-                    termsCollectionPath = `artifacts/${appId}/users/${userId}/terms`;
+                    termsCollectionPath = `planners/${userId}/terms`; // User-specific data path
                     
                     // Update UI
-                    authStatusEl.textContent = `User ID: ${userId}`;
+                    authStatusEl.textContent = `Signed in as ${user.displayName} (${user.email})`;
+                    loginOverlay.classList.add('hidden');
+                    appContainer.classList.add('opacity-100');
                     addTermBtn.classList.remove('hidden');
+                    signOutBtn.classList.remove('hidden');
                     loadingIndicator.classList.add('hidden');
 
                     // Set up the real-time listener for this user's data
                     setupSnapshotListener();
 
                 } else {
-                    // User is signed out or not yet signed in
-                    authStatusEl.textContent = "Authenticating...";
+                    // User is signed out
+                    authStatusEl.textContent = "Not signed in.";
+                    loginOverlay.classList.remove('hidden');
+                    appContainer.classList.remove('opacity-100');
                     addTermBtn.classList.add('hidden');
-                    loadingIndicator.classList.remove('hidden');
+                    signOutBtn.classList.add('hidden');
+                    loadingIndicator.classList.add('hidden');
 
                     // Stop listening to old data
                     if (termsSnapshotUnsubscribe) {
@@ -180,18 +216,6 @@
                     }
                     terms = []; // Clear local data
                     render(); // Render empty state
-
-                    // Attempt to sign in
-                    try {
-                        if (typeof __initial_auth_token !== 'undefined') {
-                            await signInWithCustomToken(auth, __initial_auth_token);
-                        } else {
-                            await signInAnonymously(auth);
-                        }
-                    } catch (error) {
-                        console.error("Authentication error:", error);
-                        authStatusEl.textContent = "Authentication failed. Please refresh.";
-                    }
                 }
             });
         }
@@ -210,11 +234,11 @@
                     newTerms.push({ id: doc.id, ...doc.data() });
                 });
 
-                // Sort in memory (as per instructions, avoid orderBy)
+                // Sort in memory
                 terms = newTerms.sort((a, b) => a.order - b.order);
                 
                 // Check for empty state and add default data if needed
-                if (terms.length === 0) {
+                if (querySnapshot.size === 0) { // More reliable check
                     addDefaultData();
                 } else {
                     render(); // Re-render the UI with new data
@@ -254,22 +278,11 @@
         // --- MODAL LOGIC ---
         function showModal({ title, text, showInput = true, inputPlaceholder = '', confirmText = 'Confirm', onConfirm }) {
             modalTitle.textContent = title;
-            
-            if (text) {
-                modalText.textContent = text;
-                modalText.classList.remove('hidden');
-            } else {
-                modalText.classList.add('hidden');
-            }
-
-            if (showInput) {
-                modalInput.value = '';
-                modalInput.placeholder = inputPlaceholder;
-                modalInput.classList.remove('hidden');
-            } else {
-                modalInput.classList.add('hidden');
-            }
-            
+            modalText.textContent = text;
+            modalText.classList.toggle('hidden', !text);
+            modalInput.value = '';
+            modalInput.placeholder = inputPlaceholder;
+            modalInput.classList.toggle('hidden', !showInput);
             modalConfirmBtn.textContent = confirmText;
             modalConfirmCallback = onConfirm;
             
@@ -293,9 +306,6 @@
         }
 
         // --- CORE LOGIC (Modifies Firestore) ---
-        // Note: We no longer call render() or saveData(). 
-        // We modify Firestore, and onSnapshot handles rendering.
-
         function addTerm() {
              showModal({
                 title: 'Add New Term',
@@ -332,7 +342,6 @@
                                     id: `course-${Date.now()}`,
                                     name: courseName.trim()
                                 };
-                                // Create a new array with the added course
                                 const newCourses = [...term.courses, newCourse];
                                 const termDocRef = doc(db, termsCollectionPath, termId);
                                 await updateDoc(termDocRef, { courses: newCourses });
@@ -351,14 +360,14 @@
 
             showModal({
                 title: 'Delete Term?',
-                text: `Are you sure you want to delete "${term.name}" and all its courses?`,
+                text: `Are you sure you want to delete "${term.name}"?`,
                 showInput: false,
                 confirmText: 'Delete',
                 onConfirm: async () => {
                     try {
                         await deleteDoc(doc(db, termsCollectionPath, termId));
-                        // After deleting, we must update the order of remaining terms
-                        await reorderTerms();
+                        // After deleting, re-order the remaining terms
+                        await reorderTermsOnDelete(termId);
                     } catch (error) {
                         console.error("Error deleting term: ", error);
                     }
@@ -366,10 +375,10 @@
             });
         }
         
-        async function reorderTerms() {
-            // Re-order terms based on the *local* state, minus the deleted one
+        async function reorderTermsOnDelete(deletedTermId) {
+            // Re-order terms based on the *local* state, *minus* the deleted one
             const batch = writeBatch(db);
-            const remainingTerms = terms.filter(t => terms.find(lt => lt.id === t.id)); // A bit redundant, but ensures we use the current state
+            const remainingTerms = terms.filter(t => t.id !== deletedTermId);
             remainingTerms.forEach((term, index) => {
                  const docRef = doc(db, termsCollectionPath, term.id);
                  batch.update(docRef, { order: index });
@@ -401,28 +410,21 @@
         }
         
         async function updateTermName(termId, newName) {
-            const term = terms.find(t => t.id === termId);
-            if (term && newName) {
-                try {
-                    const termDocRef = doc(db, termsCollectionPath, termId);
-                    await updateDoc(termDocRef, { name: newName });
-                } catch (error) {
-                    console.error("Error updating term name: ", error);
-                }
+            try {
+                const termDocRef = doc(db, termsCollectionPath, termId);
+                await updateDoc(termDocRef, { name: newName });
+            } catch (error) {
+                console.error("Error updating term name: ", error);
             }
         }
 
         async function updateCourseName(termId, courseId, newName) {
             const term = terms.find(t => t.id === termId);
-            if (term && newName) {
+            if (term) {
                 try {
-                    // Create a new array with the updated course name
-                    const newCourses = term.courses.map(course => {
-                        if (course.id === courseId) {
-                            return { ...course, name: newName };
-                        }
-                        return course;
-                    });
+                    const newCourses = term.courses.map(course => 
+                        (course.id === courseId) ? { ...course, name: newName } : course
+                    );
                     const termDocRef = doc(db, termsCollectionPath, termId);
                     await updateDoc(termDocRef, { courses: newCourses });
                 } catch (error) {
@@ -437,7 +439,7 @@
             termsContainer.innerHTML = ''; // Clear existing content
             
             if (terms.length === 0 && !loadingIndicator.classList.contains('hidden')) {
-                // Still loading or no data, don't show anything
+                // Still loading
             } else if (terms.length === 0) {
                 termsContainer.innerHTML = `<div class="w-full text-center p-10 text-gray-500">No terms added yet. Click "Add Term" to get started.</div>`;
             } else {
@@ -454,16 +456,15 @@
             el.className = 'term bg-gray-100 rounded-xl shadow-sm p-4 w-72 md:w-80 flex-shrink-0';
             el.setAttribute('draggable', 'true');
             el.dataset.termId = term.id;
-
             el.innerHTML = `
                 <div class="flex items-center justify-between mb-4">
-                    <h2 class="term-name font-semibold text-lg text-gray-700 cursor-pointer">${term.name}</h2>
-                    <button class="delete-term-btn text-gray-400 hover:text-red-500" data-term-id="${term.id}">
+                    <h2 class="term-name font-semibold text-lg text-gray-700 cursor-pointer" title="Click to edit">${term.name}</h2>
+                    <button classD="delete-term-btn text-gray-400 hover:text-red-500" data-term-id="${term.id}" title="Delete term">
                         <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
                     </button>
                 </div>
                 <div class="courses space-y-3 min-h-[6rem]">
-                    ${term.courses.map(createCourseElement).join('')}
+                    ${(term.courses || []).map(createCourseElement).join('')}
                 </div>
                 <div class="add-course-btn-placeholder"></div>
                 <button class="add-course-btn mt-4 w-full bg-white border border-gray-300 text-gray-500 py-2 px-4 rounded-lg hover:bg-gray-50 hover:border-gray-400 transition-colors">
@@ -477,8 +478,8 @@
             return `
                 <div class="course bg-white rounded-lg p-3 shadow-sm border-t-4 border-blue-500" draggable="true" data-course-id="${course.id}">
                     <div class="flex items-start justify-between">
-                        <p class="course-name text-sm flex-grow mr-2 cursor-pointer">${course.name}</p>
-                         <button class="delete-course-btn text-gray-300 hover:text-red-500 flex-shrink-0">
+                        <p class="course-name text-sm flex-grow mr-2 cursor-pointer" title="Click to edit">${course.name}</p>
+                         <button class="delete-course-btn text-gray-300 hover:text-red-500 flex-shrink-0" title="Delete course">
                             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-x-circle" viewBox="0 0 16 16"><path d="M8 15A7 7 0 1 1 8 1a7 7 0 0 1 0 14zm0 1A8 8 0 1 0 8 0a8 8 0 0 0 0 16z"/><path d="M4.646 4.646a.5.5 0 0 1 .708 0L8 7.293l2.646-2.647a.5.5 0 0 1 .708.708L8.707 8l2.647 2.646a.5.5 0 0 1-.708.708L8 8.707l-2.646 2.647a.5.5 0 0 1-.708-.708L7.293 8 4.646 5.354a.5.5 0 0 1 0-.708z"/></svg>
                         </button>
                     </div>
@@ -488,34 +489,23 @@
 
         // --- EVENT LISTENERS ---
         function attachEventListeners() {
-            // Clicks for adding/deleting
             document.querySelectorAll('.add-course-btn').forEach(btn => {
-                const termId = btn.closest('.term').dataset.termId;
-                btn.onclick = () => addCourse(termId);
+                btn.onclick = () => addCourse(btn.closest('.term').dataset.termId);
             });
              document.querySelectorAll('.delete-term-btn').forEach(btn => {
-                btn.onclick = () => deleteTerm(btn.dataset.termId);
+                btn.onclick = () => deleteTerm(btn.closest('.term').dataset.termId);
             });
             document.querySelectorAll('.delete-course-btn').forEach(btn => {
-                const courseEl = btn.closest('.course');
-                const termEl = btn.closest('.term');
-                btn.onclick = () => deleteCourse(termEl.dataset.termId, courseEl.dataset.courseId);
+                btn.onclick = () => deleteCourse(btn.closest('.term').dataset.termId, btn.closest('.course').dataset.courseId);
             });
-            
-            // Clicks for editing names
             document.querySelectorAll('.term-name, .course-name').forEach(nameEl => {
                 nameEl.addEventListener('click', (e) => makeEditable(e.target));
             });
-
-            // Drag and Drop listeners
-            const draggables = document.querySelectorAll('.term, .course');
-            draggables.forEach(item => {
+            document.querySelectorAll('.term, .course').forEach(item => {
                 item.addEventListener('dragstart', handleDragStart);
                 item.addEventListener('dragend', handleDragEnd);
             });
-            
-            const dropZones = document.querySelectorAll('.term, .courses, #terms-container');
-             dropZones.forEach(zone => {
+            document.querySelectorAll('.term, .courses, #terms-container').forEach(zone => {
                 zone.addEventListener('dragover', handleDragOver);
                 zone.addEventListener('dragenter', handleDragEnter);
                 zone.addEventListener('dragleave', handleDragLeave);
@@ -528,31 +518,24 @@
             element.focus();
             const originalText = element.textContent;
             document.execCommand('selectAll', false, null);
-
             const saveChanges = () => {
                 element.removeAttribute('contenteditable');
                 const newText = element.textContent.trim();
                 if (newText && newText !== originalText) {
                     if (element.classList.contains('term-name')) {
-                        const termId = element.closest('.term').dataset.termId;
-                        updateTermName(termId, newText); // Async update
+                        updateTermName(element.closest('.term').dataset.termId, newText);
                     } else if (element.classList.contains('course-name')) {
-                        const termId = element.closest('.term').dataset.termId;
-                        const courseId = element.closest('.course').dataset.courseId;
-                        updateCourseName(termId, courseId, newText); // Async update
+                        updateCourseName(element.closest('.term').dataset.termId, element.closest('.course').dataset.courseId, newText);
                     }
                 } else if (!newText) {
                     element.textContent = originalText; // revert if empty
                 }
             };
-            
             element.addEventListener('blur', saveChanges, { once: true });
             element.addEventListener('keydown', e => {
-                if (e.key === 'Enter') {
-                    e.preventDefault();
-                    element.blur();
-                } else if (e.key === 'Escape') {
-                    element.textContent = originalText;
+                if (e.key === 'Enter') e.preventDefault();
+                if (e.key === 'Enter' || e.key === 'Escape') {
+                    if (e.key === 'Escape') element.textContent = originalText;
                     element.blur();
                 }
             });
@@ -560,119 +543,90 @@
 
         // --- DRAG & DROP HANDLERS ---
         function handleDragStart(e) {
-            // Use setTimeout to allow the DOM to update before we capture the element
             setTimeout(() => e.target.classList.add('dragging'), 0);
-            
             if (e.target.classList.contains('term')) {
                 draggedItem = { type: 'term', termId: e.target.dataset.termId };
             } else if (e.target.classList.contains('course')) {
-                 const termId = e.target.closest('.term').dataset.termId;
-                 draggedItem = { type: 'course', termId: termId, courseId: e.target.dataset.courseId };
+                 draggedItem = { type: 'course', termId: e.target.closest('.term').dataset.termId, courseId: e.target.dataset.courseId };
             }
             e.dataTransfer.effectAllowed = 'move';
         }
-        
         function handleDragEnd(e) {
             e.target.classList.remove('dragging');
-            document.querySelectorAll('.drag-over, .course-list-drag-over').forEach(el => {
-                el.classList.remove('drag-over', 'course-list-drag-over');
-            });
+            document.querySelectorAll('.drag-over, .course-list-drag-over').forEach(el => el.classList.remove('drag-over', 'course-list-drag-over'));
             draggedItem = null;
         }
-
         function handleDragOver(e) {
             e.preventDefault(); 
             e.dataTransfer.dropEffect = 'move';
         }
-        
         function handleDragEnter(e) {
             e.preventDefault();
             const dropZone = e.target.closest('.term, .courses, #terms-container');
             if (!dropZone || dropZone.classList.contains('dragging')) return;
-
             if (draggedItem.type === 'term' && (dropZone.classList.contains('term') || dropZone.id === 'terms-container')) {
                  e.target.closest('.term')?.classList.add('drag-over');
             } else if (draggedItem.type === 'course' && dropZone.classList.contains('courses')) {
                 dropZone.classList.add('course-list-drag-over');
             }
         }
-        
         function handleDragLeave(e) {
-            const relatedTarget = e.relatedTarget;
             const dropZone = e.currentTarget;
-            if (relatedTarget && dropZone.contains(relatedTarget)) {
-                return;
-            }
+            if (e.relatedTarget && dropZone.contains(e.relatedTarget)) return;
             dropZone.classList.remove('drag-over', 'course-list-drag-over');
         }
 
         async function handleDrop(e) {
-            e.preventDefault();
-            e.stopPropagation();
+            e.preventDefault(); e.stopPropagation();
             if (!draggedItem) return;
-
-            const dropTarget = e.target;
-
             try {
                 // --- Move Course ---
                 if (draggedItem.type === 'course') {
-                    const targetTermEl = dropTarget.closest('.term');
+                    const targetTermEl = e.target.closest('.term');
                     if (!targetTermEl) return;
                     const destinationTermId = targetTermEl.dataset.termId;
 
                     const sourceTerm = terms.find(t => t.id === draggedItem.termId);
                     const destTerm = terms.find(t => t.id === destinationTermId);
                     
-                    const courseIndex = sourceTerm.courses.findIndex(c => c.id === draggedItem.courseId);
-                    const [course] = sourceTerm.courses.splice(courseIndex, 1); // Remove from source (local)
-
-                    const targetCourseEl = dropTarget.closest('.course');
-                    let newIndex = destTerm.courses.length; // Default to end
+                    const [course] = sourceTerm.courses.splice(sourceTerm.courses.findIndex(c => c.id === draggedItem.courseId), 1);
+                    const targetCourseEl = e.target.closest('.course');
+                    let newIndex = destTerm.courses.length;
                     if (targetCourseEl) {
                         newIndex = destTerm.courses.findIndex(c => c.id === targetCourseEl.dataset.courseId);
                     }
-                    destTerm.courses.splice(newIndex, 0, course); // Add to destination (local)
+                    destTerm.courses.splice(newIndex, 0, course);
 
-                    // Now update Firestore
-                    const sourceDocRef = doc(db, termsCollectionPath, sourceTerm.id);
-                    await updateDoc(sourceDocRef, { courses: sourceTerm.courses });
-                    
+                    // Update Firestore
+                    const batch = writeBatch(db);
+                    batch.update(doc(db, termsCollectionPath, sourceTerm.id), { courses: sourceTerm.courses });
                     if (sourceTerm.id !== destTerm.id) {
-                        const destDocRef = doc(db, termsCollectionPath, destTerm.id);
-                        await updateDoc(destDocRef, { courses: destTerm.courses });
+                        batch.update(doc(db, termsCollectionPath, destTerm.id), { courses: destTerm.courses });
                     }
+                    await batch.commit();
                 }
 
                 // --- Move Term ---
                 if (draggedItem.type === 'term') {
-                    const targetTermEl = dropTarget.closest('.term');
+                    const targetTermEl = e.target.closest('.term');
                     if (targetTermEl && targetTermEl.dataset.termId !== draggedItem.termId) {
-                        
-                        // Re-order the *local* terms array first
                         const sourceIndex = terms.findIndex(t => t.id === draggedItem.termId);
                         const [draggedTerm] = terms.splice(sourceIndex, 1);
                         const targetIndex = terms.findIndex(t => t.id === targetTermEl.dataset.termId);
                         terms.splice(targetIndex, 0, draggedTerm);
-
-                        // Now commit the new 'order' for all terms in a batch
+                        
                         const batch = writeBatch(db);
                         terms.forEach((term, index) => {
-                            const docRef = doc(db, termsCollectionPath, term.id);
-                            batch.update(docRef, { order: index });
+                            batch.update(doc(db, termsCollectionPath, term.id), { order: index });
                         });
                         await batch.commit();
                     }
                 }
             } catch (error) {
                 console.error("Error handling drop: ", error);
-                // If drop fails, the snapshot listener will eventually correct
-                // the UI back to the DB state, but we could also force a re-render
-                // or show an error. For now, we rely on onSnapshot.
             }
         }
-
     </script>
-
 </body>
 </html>
 
