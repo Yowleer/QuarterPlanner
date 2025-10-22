@@ -1,0 +1,678 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Quarter & Course Planner</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+        }
+        /* Custom styles for drag-and-drop feedback */
+        .dragging {
+            opacity: 0.5;
+            transform: scale(1.05);
+        }
+        .drag-over {
+            background-color: #eef2ff; /* A light indigo color for drop zones */
+            border: 2px dashed #6366f1;
+        }
+        .course-list-drag-over {
+            background-color: #f0f9ff;
+        }
+        /* Hide the default add button when the course list is empty */
+        .courses:empty + .add-course-btn-placeholder {
+            display: none;
+        }
+         /* Simple animation for adding/moving items */
+        .term, .course {
+            transition: all 0.2s ease-in-out;
+        }
+    </style>
+</head>
+<body class="bg-gray-50 text-gray-800">
+
+    <div class="container mx-auto p-4 md:p-8">
+        <!-- Header -->
+        <header class="flex flex-col md:flex-row items-start md:items-center justify-between mb-8 gap-4">
+            <div>
+                <h1 class="text-2xl md:text-3xl font-bold text-gray-700">Academic Planner</h1>
+                <div id="auth-status" class="text-xs text-gray-500 mt-1">Loading...</div>
+            </div>
+            <button id="add-term-btn" class="bg-indigo-600 text-white font-semibold py-2 px-4 rounded-lg shadow-md hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-opacity-75 transition-colors hidden">
+                Add Term
+            </button>
+        </header>
+
+        <!-- Terms Container -->
+        <main id="terms-container" class="flex overflow-x-auto pb-4 gap-6 min-h-[60vh] items-start">
+            <!-- Loading state -->
+            <div id="loading-indicator" class="w-full text-center p-10 text-gray-500">
+                Connecting to planner...
+            </div>
+            <!-- Term columns will be dynamically inserted here -->
+        </main>
+    </div>
+
+    <!-- Modal Structure -->
+    <div id="modal-backdrop" class="fixed inset-0 bg-black bg-opacity-50 hidden z-40 transition-opacity"></div>
+    <div id="modal" class="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-white rounded-lg shadow-xl p-6 w-full max-w-md hidden z-50 transition-transform scale-95">
+        <h3 id="modal-title" class="text-lg font-bold mb-4">Modal Title</h3>
+        <p id="modal-text" class="text-gray-600 mb-4 hidden"></p>
+        <input id="modal-input" type="text" class="w-full border border-gray-300 rounded-md p-2 mb-4" placeholder="Enter value...">
+        <div class="flex justify-end gap-4">
+            <button id="modal-cancel-btn" class="bg-gray-200 text-gray-700 font-semibold py-2 px-4 rounded-lg hover:bg-gray-300 transition-colors">Cancel</button>
+            <button id="modal-confirm-btn" class="bg-indigo-600 text-white font-semibold py-2 px-4 rounded-lg hover:bg-indigo-700 transition-colors">Confirm</button>
+        </div>
+    </div>
+
+
+    <script type="module">
+        // --- Firebase SDK Imports ---
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { 
+            getAuth, 
+            signInAnonymously, 
+            signInWithCustomToken, 
+            onAuthStateChanged 
+        } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { 
+            getFirestore, 
+            doc, 
+            addDoc, 
+            setDoc, 
+            updateDoc, 
+            deleteDoc, 
+            onSnapshot, 
+            collection, 
+            query,
+            writeBatch,
+            setLogLevel
+        } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // --- DATA MANAGEMENT ---
+        let terms = []; // Local cache of DB, managed by onSnapshot
+        let draggedItem = null; // {type: 'term'/'course', termId: string, courseId: string}
+
+        // --- FIREBASE & AUTH GLOBALS ---
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
+        let app, db, auth;
+        let userId;
+        let termsCollectionPath;
+        let termsSnapshotUnsubscribe = null; // To stop listener on logout
+
+        // --- DOM ELEMENTS ---
+        const termsContainer = document.getElementById('terms-container');
+        const addTermBtn = document.getElementById('add-term-btn');
+        const authStatusEl = document.getElementById('auth-status');
+        const loadingIndicator = document.getElementById('loading-indicator');
+        const modalBackdrop = document.getElementById('modal-backdrop');
+        const modal = document.getElementById('modal');
+        const modalTitle = document.getElementById('modal-title');
+        const modalText = document.getElementById('modal-text');
+        const modalInput = document.getElementById('modal-input');
+        const modalCancelBtn = document.getElementById('modal-cancel-btn');
+        const modalConfirmBtn = document.getElementById('modal-confirm-btn');
+        let modalConfirmCallback = null;
+
+        // --- INITIALIZATION ---
+        document.addEventListener('DOMContentLoaded', () => {
+            try {
+                app = initializeApp(firebaseConfig);
+                db = getFirestore(app);
+                auth = getAuth(app);
+                setLogLevel('Debug'); // Enable Firestore logging
+
+                setupAuthListener(); // Start auth process
+
+                // Attach modal and static button listeners
+                addTermBtn.addEventListener('click', addTerm);
+                modalCancelBtn.addEventListener('click', hideModal);
+                modalBackdrop.addEventListener('click', hideModal);
+                modalConfirmBtn.addEventListener('click', () => {
+                    if (modalConfirmCallback) {
+                        modalConfirmCallback(modalInput.value);
+                    }
+                    hideModal();
+                });
+                modalInput.addEventListener('keydown', e => {
+                    if (e.key === 'Enter') {
+                        e.preventDefault();
+                        modalConfirmBtn.click();
+                    }
+                });
+            } catch (error) {
+                console.error("Error initializing Firebase:", error);
+                authStatusEl.textContent = "Error connecting. Please refresh.";
+            }
+        });
+
+        // --- AUTHENTICATION ---
+        function setupAuthListener() {
+            onAuthStateChanged(auth, async (user) => {
+                if (user) {
+                    // User is signed in
+                    userId = user.uid;
+                    termsCollectionPath = `artifacts/${appId}/users/${userId}/terms`;
+                    
+                    // Update UI
+                    authStatusEl.textContent = `User ID: ${userId}`;
+                    addTermBtn.classList.remove('hidden');
+                    loadingIndicator.classList.add('hidden');
+
+                    // Set up the real-time listener for this user's data
+                    setupSnapshotListener();
+
+                } else {
+                    // User is signed out or not yet signed in
+                    authStatusEl.textContent = "Authenticating...";
+                    addTermBtn.classList.add('hidden');
+                    loadingIndicator.classList.remove('hidden');
+
+                    // Stop listening to old data
+                    if (termsSnapshotUnsubscribe) {
+                        termsSnapshotUnsubscribe();
+                    }
+                    terms = []; // Clear local data
+                    render(); // Render empty state
+
+                    // Attempt to sign in
+                    try {
+                        if (typeof __initial_auth_token !== 'undefined') {
+                            await signInWithCustomToken(auth, __initial_auth_token);
+                        } else {
+                            await signInAnonymously(auth);
+                        }
+                    } catch (error) {
+                        console.error("Authentication error:", error);
+                        authStatusEl.textContent = "Authentication failed. Please refresh.";
+                    }
+                }
+            });
+        }
+
+        // --- REAL-TIME DATA (FIRESTORE) ---
+        function setupSnapshotListener() {
+            if (termsSnapshotUnsubscribe) {
+                termsSnapshotUnsubscribe(); // Unsubscribe from any previous listener
+            }
+
+            const q = query(collection(db, termsCollectionPath));
+
+            termsSnapshotUnsubscribe = onSnapshot(q, (querySnapshot) => {
+                const newTerms = [];
+                querySnapshot.forEach((doc) => {
+                    newTerms.push({ id: doc.id, ...doc.data() });
+                });
+
+                // Sort in memory (as per instructions, avoid orderBy)
+                terms = newTerms.sort((a, b) => a.order - b.order);
+                
+                // Check for empty state and add default data if needed
+                if (terms.length === 0) {
+                    addDefaultData();
+                } else {
+                    render(); // Re-render the UI with new data
+                }
+            }, (error) => {
+                console.error("Error listening to terms:", error);
+                authStatusEl.textContent = "Error syncing data.";
+            });
+        }
+        
+        async function addDefaultData() {
+            // Add default data in a batch
+            try {
+                const batch = writeBatch(db);
+                const term1Ref = doc(collection(db, termsCollectionPath));
+                batch.set(term1Ref, { 
+                    name: "Fall 2025", 
+                    courses: [{id: `course-${Date.now()}-1`, name: "CS122A: Intro to Data Structures"}],
+                    order: 0
+                });
+                
+                const term2Ref = doc(collection(db, termsCollectionPath));
+                batch.set(term2Ref, { 
+                    name: "Winter 2026", 
+                    courses: [{id: `course-${Date.now()}-2`, name: "MATH2B: Linear Algebra"}],
+                    order: 1
+                });
+                
+                await batch.commit();
+                // No need to render, onSnapshot will pick up the change and do it
+            } catch (error) {
+                console.error("Error adding default data: ", error);
+            }
+        }
+
+
+        // --- MODAL LOGIC ---
+        function showModal({ title, text, showInput = true, inputPlaceholder = '', confirmText = 'Confirm', onConfirm }) {
+            modalTitle.textContent = title;
+            
+            if (text) {
+                modalText.textContent = text;
+                modalText.classList.remove('hidden');
+            } else {
+                modalText.classList.add('hidden');
+            }
+
+            if (showInput) {
+                modalInput.value = '';
+                modalInput.placeholder = inputPlaceholder;
+                modalInput.classList.remove('hidden');
+            } else {
+                modalInput.classList.add('hidden');
+            }
+            
+            modalConfirmBtn.textContent = confirmText;
+            modalConfirmCallback = onConfirm;
+            
+            modalBackdrop.classList.remove('hidden');
+            modal.classList.remove('hidden');
+            setTimeout(() => {
+                modalBackdrop.classList.add('opacity-100');
+                modal.classList.add('scale-100');
+                if(showInput) modalInput.focus();
+            }, 10);
+        }
+
+        function hideModal() {
+            modalConfirmCallback = null;
+            modalBackdrop.classList.remove('opacity-100');
+            modal.classList.remove('scale-100');
+             setTimeout(() => {
+                modalBackdrop.classList.add('hidden');
+                modal.classList.add('hidden');
+            }, 200);
+        }
+
+        // --- CORE LOGIC (Modifies Firestore) ---
+        // Note: We no longer call render() or saveData(). 
+        // We modify Firestore, and onSnapshot handles rendering.
+
+        function addTerm() {
+             showModal({
+                title: 'Add New Term',
+                inputPlaceholder: 'e.g., Fall 2025',
+                confirmText: 'Add Term',
+                onConfirm: async (termName) => {
+                    if (termName.trim()) {
+                        try {
+                            const newTerm = {
+                                name: termName.trim(),
+                                courses: [],
+                                order: terms.length // Add to the end
+                            };
+                            await addDoc(collection(db, termsCollectionPath), newTerm);
+                        } catch (error) {
+                            console.error("Error adding term: ", error);
+                        }
+                    }
+                }
+            });
+        }
+
+        function addCourse(termId) {
+            showModal({
+                title: 'Add New Course',
+                inputPlaceholder: 'e.g., CS122A',
+                confirmText: 'Add Course',
+                onConfirm: async (courseName) => {
+                    if (courseName.trim()) {
+                        const term = terms.find(t => t.id === termId);
+                        if (term) {
+                            try {
+                                const newCourse = {
+                                    id: `course-${Date.now()}`,
+                                    name: courseName.trim()
+                                };
+                                // Create a new array with the added course
+                                const newCourses = [...term.courses, newCourse];
+                                const termDocRef = doc(db, termsCollectionPath, termId);
+                                await updateDoc(termDocRef, { courses: newCourses });
+                            } catch (error) {
+                                console.error("Error adding course: ", error);
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        function deleteTerm(termId) {
+            const term = terms.find(t => t.id === termId);
+            if (!term) return;
+
+            showModal({
+                title: 'Delete Term?',
+                text: `Are you sure you want to delete "${term.name}" and all its courses?`,
+                showInput: false,
+                confirmText: 'Delete',
+                onConfirm: async () => {
+                    try {
+                        await deleteDoc(doc(db, termsCollectionPath, termId));
+                        // After deleting, we must update the order of remaining terms
+                        await reorderTerms();
+                    } catch (error) {
+                        console.error("Error deleting term: ", error);
+                    }
+                }
+            });
+        }
+        
+        async function reorderTerms() {
+            // Re-order terms based on the *local* state, minus the deleted one
+            const batch = writeBatch(db);
+            const remainingTerms = terms.filter(t => terms.find(lt => lt.id === t.id)); // A bit redundant, but ensures we use the current state
+            remainingTerms.forEach((term, index) => {
+                 const docRef = doc(db, termsCollectionPath, term.id);
+                 batch.update(docRef, { order: index });
+            });
+            await batch.commit();
+        }
+
+        function deleteCourse(termId, courseId) {
+            const term = terms.find(t => t.id === termId);
+            if (!term) return;
+            const course = term.courses.find(c => c.id === courseId);
+            if (!course) return;
+
+            showModal({
+                title: 'Delete Course?',
+                text: `Are you sure you want to delete "${course.name}"?`,
+                showInput: false,
+                confirmText: 'Delete',
+                onConfirm: async () => {
+                    try {
+                        const newCourses = term.courses.filter(c => c.id !== courseId);
+                        const termDocRef = doc(db, termsCollectionPath, termId);
+                        await updateDoc(termDocRef, { courses: newCourses });
+                    } catch (error) {
+                        console.error("Error deleting course: ", error);
+                    }
+                }
+            });
+        }
+        
+        async function updateTermName(termId, newName) {
+            const term = terms.find(t => t.id === termId);
+            if (term && newName) {
+                try {
+                    const termDocRef = doc(db, termsCollectionPath, termId);
+                    await updateDoc(termDocRef, { name: newName });
+                } catch (error) {
+                    console.error("Error updating term name: ", error);
+                }
+            }
+        }
+
+        async function updateCourseName(termId, courseId, newName) {
+            const term = terms.find(t => t.id === termId);
+            if (term && newName) {
+                try {
+                    // Create a new array with the updated course name
+                    const newCourses = term.courses.map(course => {
+                        if (course.id === courseId) {
+                            return { ...course, name: newName };
+                        }
+                        return course;
+                    });
+                    const termDocRef = doc(db, termsCollectionPath, termId);
+                    await updateDoc(termDocRef, { courses: newCourses });
+                } catch (error) {
+                    console.error("Error updating course name: ", error);
+                }
+            }
+        }
+
+        // --- RENDERING ---
+        function render() {
+            if (!termsContainer) return;
+            termsContainer.innerHTML = ''; // Clear existing content
+            
+            if (terms.length === 0 && !loadingIndicator.classList.contains('hidden')) {
+                // Still loading or no data, don't show anything
+            } else if (terms.length === 0) {
+                termsContainer.innerHTML = `<div class="w-full text-center p-10 text-gray-500">No terms added yet. Click "Add Term" to get started.</div>`;
+            } else {
+                 terms.forEach(term => {
+                    const termEl = createTermElement(term);
+                    termsContainer.appendChild(termEl);
+                });
+            }
+            attachEventListeners();
+        }
+        
+        function createTermElement(term) {
+            const el = document.createElement('div');
+            el.className = 'term bg-gray-100 rounded-xl shadow-sm p-4 w-72 md:w-80 flex-shrink-0';
+            el.setAttribute('draggable', 'true');
+            el.dataset.termId = term.id;
+
+            el.innerHTML = `
+                <div class="flex items-center justify-between mb-4">
+                    <h2 class="term-name font-semibold text-lg text-gray-700 cursor-pointer">${term.name}</h2>
+                    <button class="delete-term-btn text-gray-400 hover:text-red-500" data-term-id="${term.id}">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                    </button>
+                </div>
+                <div class="courses space-y-3 min-h-[6rem]">
+                    ${term.courses.map(createCourseElement).join('')}
+                </div>
+                <div class="add-course-btn-placeholder"></div>
+                <button class="add-course-btn mt-4 w-full bg-white border border-gray-300 text-gray-500 py-2 px-4 rounded-lg hover:bg-gray-50 hover:border-gray-400 transition-colors">
+                    + Add Course
+                </button>
+            `;
+            return el;
+        }
+
+        function createCourseElement(course) {
+            return `
+                <div class="course bg-white rounded-lg p-3 shadow-sm border-t-4 border-blue-500" draggable="true" data-course-id="${course.id}">
+                    <div class="flex items-start justify-between">
+                        <p class="course-name text-sm flex-grow mr-2 cursor-pointer">${course.name}</p>
+                         <button class="delete-course-btn text-gray-300 hover:text-red-500 flex-shrink-0">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-x-circle" viewBox="0 0 16 16"><path d="M8 15A7 7 0 1 1 8 1a7 7 0 0 1 0 14zm0 1A8 8 0 1 0 8 0a8 8 0 0 0 0 16z"/><path d="M4.646 4.646a.5.5 0 0 1 .708 0L8 7.293l2.646-2.647a.5.5 0 0 1 .708.708L8.707 8l2.647 2.646a.5.5 0 0 1-.708.708L8 8.707l-2.646 2.647a.5.5 0 0 1-.708-.708L7.293 8 4.646 5.354a.5.5 0 0 1 0-.708z"/></svg>
+                        </button>
+                    </div>
+                </div>
+            `;
+        }
+
+        // --- EVENT LISTENERS ---
+        function attachEventListeners() {
+            // Clicks for adding/deleting
+            document.querySelectorAll('.add-course-btn').forEach(btn => {
+                const termId = btn.closest('.term').dataset.termId;
+                btn.onclick = () => addCourse(termId);
+            });
+             document.querySelectorAll('.delete-term-btn').forEach(btn => {
+                btn.onclick = () => deleteTerm(btn.dataset.termId);
+            });
+            document.querySelectorAll('.delete-course-btn').forEach(btn => {
+                const courseEl = btn.closest('.course');
+                const termEl = btn.closest('.term');
+                btn.onclick = () => deleteCourse(termEl.dataset.termId, courseEl.dataset.courseId);
+            });
+            
+            // Clicks for editing names
+            document.querySelectorAll('.term-name, .course-name').forEach(nameEl => {
+                nameEl.addEventListener('click', (e) => makeEditable(e.target));
+            });
+
+            // Drag and Drop listeners
+            const draggables = document.querySelectorAll('.term, .course');
+            draggables.forEach(item => {
+                item.addEventListener('dragstart', handleDragStart);
+                item.addEventListener('dragend', handleDragEnd);
+            });
+            
+            const dropZones = document.querySelectorAll('.term, .courses, #terms-container');
+             dropZones.forEach(zone => {
+                zone.addEventListener('dragover', handleDragOver);
+                zone.addEventListener('dragenter', handleDragEnter);
+                zone.addEventListener('dragleave', handleDragLeave);
+                zone.addEventListener('drop', handleDrop);
+            });
+        }
+        
+        function makeEditable(element) {
+            element.setAttribute('contenteditable', 'true');
+            element.focus();
+            const originalText = element.textContent;
+            document.execCommand('selectAll', false, null);
+
+            const saveChanges = () => {
+                element.removeAttribute('contenteditable');
+                const newText = element.textContent.trim();
+                if (newText && newText !== originalText) {
+                    if (element.classList.contains('term-name')) {
+                        const termId = element.closest('.term').dataset.termId;
+                        updateTermName(termId, newText); // Async update
+                    } else if (element.classList.contains('course-name')) {
+                        const termId = element.closest('.term').dataset.termId;
+                        const courseId = element.closest('.course').dataset.courseId;
+                        updateCourseName(termId, courseId, newText); // Async update
+                    }
+                } else if (!newText) {
+                    element.textContent = originalText; // revert if empty
+                }
+            };
+            
+            element.addEventListener('blur', saveChanges, { once: true });
+            element.addEventListener('keydown', e => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    element.blur();
+                } else if (e.key === 'Escape') {
+                    element.textContent = originalText;
+                    element.blur();
+                }
+            });
+        }
+
+        // --- DRAG & DROP HANDLERS ---
+        function handleDragStart(e) {
+            // Use setTimeout to allow the DOM to update before we capture the element
+            setTimeout(() => e.target.classList.add('dragging'), 0);
+            
+            if (e.target.classList.contains('term')) {
+                draggedItem = { type: 'term', termId: e.target.dataset.termId };
+            } else if (e.target.classList.contains('course')) {
+                 const termId = e.target.closest('.term').dataset.termId;
+                 draggedItem = { type: 'course', termId: termId, courseId: e.target.dataset.courseId };
+            }
+            e.dataTransfer.effectAllowed = 'move';
+        }
+        
+        function handleDragEnd(e) {
+            e.target.classList.remove('dragging');
+            document.querySelectorAll('.drag-over, .course-list-drag-over').forEach(el => {
+                el.classList.remove('drag-over', 'course-list-drag-over');
+            });
+            draggedItem = null;
+        }
+
+        function handleDragOver(e) {
+            e.preventDefault(); 
+            e.dataTransfer.dropEffect = 'move';
+        }
+        
+        function handleDragEnter(e) {
+            e.preventDefault();
+            const dropZone = e.target.closest('.term, .courses, #terms-container');
+            if (!dropZone || dropZone.classList.contains('dragging')) return;
+
+            if (draggedItem.type === 'term' && (dropZone.classList.contains('term') || dropZone.id === 'terms-container')) {
+                 e.target.closest('.term')?.classList.add('drag-over');
+            } else if (draggedItem.type === 'course' && dropZone.classList.contains('courses')) {
+                dropZone.classList.add('course-list-drag-over');
+            }
+        }
+        
+        function handleDragLeave(e) {
+            const relatedTarget = e.relatedTarget;
+            const dropZone = e.currentTarget;
+            if (relatedTarget && dropZone.contains(relatedTarget)) {
+                return;
+            }
+            dropZone.classList.remove('drag-over', 'course-list-drag-over');
+        }
+
+        async function handleDrop(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            if (!draggedItem) return;
+
+            const dropTarget = e.target;
+
+            try {
+                // --- Move Course ---
+                if (draggedItem.type === 'course') {
+                    const targetTermEl = dropTarget.closest('.term');
+                    if (!targetTermEl) return;
+                    const destinationTermId = targetTermEl.dataset.termId;
+
+                    const sourceTerm = terms.find(t => t.id === draggedItem.termId);
+                    const destTerm = terms.find(t => t.id === destinationTermId);
+                    
+                    const courseIndex = sourceTerm.courses.findIndex(c => c.id === draggedItem.courseId);
+                    const [course] = sourceTerm.courses.splice(courseIndex, 1); // Remove from source (local)
+
+                    const targetCourseEl = dropTarget.closest('.course');
+                    let newIndex = destTerm.courses.length; // Default to end
+                    if (targetCourseEl) {
+                        newIndex = destTerm.courses.findIndex(c => c.id === targetCourseEl.dataset.courseId);
+                    }
+                    destTerm.courses.splice(newIndex, 0, course); // Add to destination (local)
+
+                    // Now update Firestore
+                    const sourceDocRef = doc(db, termsCollectionPath, sourceTerm.id);
+                    await updateDoc(sourceDocRef, { courses: sourceTerm.courses });
+                    
+                    if (sourceTerm.id !== destTerm.id) {
+                        const destDocRef = doc(db, termsCollectionPath, destTerm.id);
+                        await updateDoc(destDocRef, { courses: destTerm.courses });
+                    }
+                }
+
+                // --- Move Term ---
+                if (draggedItem.type === 'term') {
+                    const targetTermEl = dropTarget.closest('.term');
+                    if (targetTermEl && targetTermEl.dataset.termId !== draggedItem.termId) {
+                        
+                        // Re-order the *local* terms array first
+                        const sourceIndex = terms.findIndex(t => t.id === draggedItem.termId);
+                        const [draggedTerm] = terms.splice(sourceIndex, 1);
+                        const targetIndex = terms.findIndex(t => t.id === targetTermEl.dataset.termId);
+                        terms.splice(targetIndex, 0, draggedTerm);
+
+                        // Now commit the new 'order' for all terms in a batch
+                        const batch = writeBatch(db);
+                        terms.forEach((term, index) => {
+                            const docRef = doc(db, termsCollectionPath, term.id);
+                            batch.update(docRef, { order: index });
+                        });
+                        await batch.commit();
+                    }
+                }
+            } catch (error) {
+                console.error("Error handling drop: ", error);
+                // If drop fails, the snapshot listener will eventually correct
+                // the UI back to the DB state, but we could also force a re-render
+                // or show an error. For now, we rely on onSnapshot.
+            }
+        }
+
+    </script>
+
+</body>
+</html>
+
